@@ -1,0 +1,273 @@
+/* Twin Meadows — Spot the Difference: page styling. Warm paper backdrop,
+   framed picture cards, chunky readable HUD pills. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(1100px 500px at 50% -80px, #ffe9b8 0%, rgba(255, 233, 184, 0) 60%),
+    linear-gradient(180deg, #fdf6e3 0%, #f7ead0 55%, #efdcba 100%);
+  color: #33302a;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 18px 18px;
+}
+
+.topbar {
+  width: 100%;
+  max-width: 1240px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 34px;
+  letter-spacing: 0.5px;
+  color: #2e5d3a;
+}
+
+.brand .tagline {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #b57708;
+}
+
+.hud {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  background: #fffdf6;
+  border: 2px solid #d9c491;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-weight: 700;
+  font-size: 16px;
+  min-width: 104px;
+  text-align: center;
+  box-shadow: 0 2px 0 rgba(120, 90, 20, 0.18);
+}
+
+.pill.accent {
+  background: #e8323f;
+  border-color: #b31b27;
+  color: #ffffff;
+  font-size: 18px;
+  min-width: 128px;
+}
+
+.scene-title {
+  margin: 10px 0 8px;
+  font-size: 17px;
+  font-style: italic;
+  color: #6b5a35;
+}
+
+.stage {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  width: 100%;
+  max-width: 1240px;
+}
+
+.panel-wrap {
+  margin: 0;
+  background: #fffdf6;
+  padding: 10px 10px 6px;
+  border-radius: 14px;
+  border: 2px solid #d9c491;
+  box-shadow: 0 10px 24px rgba(101, 74, 18, 0.18);
+  flex: 0 1 600px;
+}
+
+.panel-wrap canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  cursor: crosshair;
+  background: #bfe3f5;
+}
+
+.panel-wrap figcaption {
+  text-align: center;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #8a6d2f;
+  padding: 6px 0 2px;
+}
+
+.panel-wrap.shake {
+  animation: shake 0.32s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  50% { transform: translateX(5px); }
+  75% { transform: translateX(-3px); }
+}
+
+.toast {
+  margin-top: 12px;
+  min-height: 26px;
+  font-size: 17px;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.toast.show {
+  opacity: 1;
+}
+
+.toast.good {
+  color: #2e7d32;
+}
+
+.toast.bad {
+  color: #c0272d;
+}
+
+.found-log {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 1240px;
+  min-height: 28px;
+  margin-top: 2px;
+}
+
+.found-chip {
+  background: #e7f4e4;
+  border: 1.5px solid #9ccb8e;
+  color: #2e5d3a;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.found-none {
+  color: #8a7a52;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.controls {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.controls button,
+.card button.big {
+  font: inherit;
+  font-weight: 700;
+  background: #fffdf6;
+  border: 2px solid #b57708;
+  color: #7a5205;
+  border-radius: 10px;
+  padding: 8px 18px;
+  cursor: pointer;
+  box-shadow: 0 3px 0 rgba(120, 90, 20, 0.35);
+}
+
+.controls button:hover:not(:disabled),
+.card button.big:hover {
+  background: #ffedb8;
+}
+
+.controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.card button.big {
+  background: #e8323f;
+  border-color: #b31b27;
+  color: #ffffff;
+  font-size: 19px;
+  padding: 12px 30px;
+  margin-top: 8px;
+}
+
+.keys-help {
+  font-size: 13px;
+  color: #8a7a52;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(46, 38, 18, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: 20px;
+}
+
+.overlay.show {
+  display: flex;
+}
+
+.card {
+  background: #fffdf6;
+  border: 3px solid #d9c491;
+  border-radius: 18px;
+  max-width: 520px;
+  padding: 28px 34px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 34px;
+  color: #2e5d3a;
+}
+
+.card .card-sub {
+  margin: 2px 0 12px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #b57708;
+  font-size: 14px;
+}
+
+.card p {
+  font-size: 16.5px;
+  line-height: 1.45;
+}
+
+.card .rules {
+  text-align: left;
+  font-size: 15.5px;
+  line-height: 1.5;
+  margin: 10px auto 14px;
+  max-width: 420px;
+}
