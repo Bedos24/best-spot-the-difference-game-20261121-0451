@@ -1,5 +1,6 @@
-/* Twin Meadows — Spot the Difference: page styling. Warm paper backdrop,
-   framed picture cards, chunky readable HUD pills. */
+/* Twin Meadows — Spot the Difference: page styling.
+   A warm paper backdrop, two framed picture cards, and chunky HUD pills
+   that stay readable at a glance while you hunt. */
 
 * {
   box-sizing: border-box;
@@ -18,6 +19,8 @@ body {
   align-items: center;
   padding: 14px 18px 18px;
 }
+
+/* Header: the name on the left, the score pills on the right. */
 
 .topbar {
   width: 100%;
@@ -78,6 +81,8 @@ body {
   color: #6b5a35;
 }
 
+/* The two pictures, side by side in matching frames. */
+
 .stage {
   display: flex;
   gap: 18px;
@@ -126,6 +131,8 @@ body {
   75% { transform: translateX(-3px); }
 }
 
+/* Feedback line and the running list of finds. */
+
 .toast {
   margin-top: 12px;
   min-height: 26px;
@@ -173,6 +180,8 @@ body {
   font-style: italic;
 }
 
+/* Buttons under the pictures. */
+
 .controls {
   margin-top: 12px;
   display: flex;
@@ -205,19 +214,12 @@ body {
   cursor: default;
 }
 
-.card button.big {
-  background: #e8323f;
-  border-color: #b31b27;
-  color: #ffffff;
-  font-size: 19px;
-  padding: 12px 30px;
-  margin-top: 8px;
-}
-
 .keys-help {
   font-size: 13px;
   color: #8a7a52;
 }
+
+/* Title and round-complete cards over a dimmed page. */
 
 .overlay {
   position: fixed;
@@ -270,4 +272,13 @@ body {
   line-height: 1.5;
   margin: 10px auto 14px;
   max-width: 420px;
+}
+
+.card button.big {
+  background: #e8323f;
+  border-color: #b31b27;
+  color: #ffffff;
+  font-size: 19px;
+  padding: 12px 30px;
+  margin-top: 8px;
 }

@@ -1,9 +1,11 @@
-// Pointer and keyboard input. Pointer clicks are reported in scene
-// coordinates; the keyboard drives a crosshair cursor over the focused panel
-// (Tab switches panels, Enter/Space checks the spot under the cursor).
+// Pointer and keyboard input. Pointer clicks arrive in page pixels and are
+// translated into scene coordinates here; the keyboard steers a ring cursor
+// over one panel at a time (Tab swaps panels, Enter or Space checks the spot
+// under the ring, H asks for a hint, R restarts the round).
 
 import { VIEW } from './scene.js';
 
+// Map a client (page) point on a canvas into the 600 x 600 scene grid.
 export function canvasPoint(canvas, clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -16,13 +18,14 @@ export class KeyboardCursor {
   constructor(onCheck, onHint, onRestart) {
     this.x = VIEW / 2;
     this.y = VIEW / 2;
-    this.panel = 0; // 0 = left picture, 1 = right picture
+    this.panel = 0; // 0 = the original picture, 1 = the altered one
     this.onCheck = onCheck;
     this.onHint = onHint;
     this.onRestart = onRestart;
-    this.active = false;
+    this.active = false; // the ring stays hidden until a key is pressed
   }
 
+  // Returns true when the key belonged to the game (and was swallowed).
   handle(event) {
     const step = event.shiftKey ? 42 : 14;
     switch (event.key) {
@@ -61,19 +64,20 @@ export class KeyboardCursor {
     return true;
   }
 
+  // The cursor: a ring with four ticks, drawn white over dark so it reads
+  // on any part of the picture.
   draw(ctx) {
     if (!this.active) return;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, 15, 0, Math.PI * 2);
-    ctx.stroke();
+    for (const [style, width] of [['rgba(255,255,255,0.95)', 5], ['#173a5e', 2.6]]) {
+      ctx.strokeStyle = style;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 15, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.strokeStyle = '#173a5e';
     ctx.lineWidth = 2.6;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, 15, 0, Math.PI * 2);
-    ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(this.x - 22, this.y);
     ctx.lineTo(this.x - 8, this.y);
