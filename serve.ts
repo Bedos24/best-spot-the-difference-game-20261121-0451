@@ -1,42 +1,48 @@
-// A pocket static server for playing Twin Meadows locally:
-//   node serve.ts   ->   http://localhost:8080
-// It serves this directory's game/ folder and nothing else, because the
-// game needs nothing else: no build, no network, no other files.
+// Twin Meadows, served locally for a quick game:
+//   node serve.ts        ->  http://localhost:8080
+//   PORT=9000 node serve.ts   (a different port)
+// Static files only, and only from game/ — the game asks for nothing else.
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const gameRoot = join(fileURLToPath(new URL('.', import.meta.url)), 'game');
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
+const gameDir = join(rootDir, 'game');
 
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-};
+const MIME = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.svg', 'image/svg+xml'],
+]);
+
+function fail(res) {
+  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+  res.end('not found');
+}
+
+async function handle(req, res) {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const rel = normalize(decodeURIComponent(url.pathname)).replace(/^[/\\]+/, '');
+  const target = join(gameDir, rel === '' ? 'index.html' : rel);
+  // Refuse anything that would climb out of game/.
+  if (!target.startsWith(gameDir)) return fail(res);
+  try {
+    const bytes = await readFile(target);
+    res.writeHead(200, { 'content-type': MIME.get(extname(target)) ?? 'application/octet-stream' });
+    res.end(bytes);
+  } catch {
+    fail(res);
+  }
+}
 
 const port = Number(process.env.PORT ?? 8080);
-
-createServer(async (req, res) => {
-  try {
-    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-    const rel = normalize(decodeURIComponent(pathname)).replace(/^[/\\]+/, '');
-    const filePath = join(gameRoot, rel === '' ? 'index.html' : rel);
-    if (!filePath.startsWith(gameRoot)) throw new Error('path escapes game/');
-    const body = await readFile(filePath);
-    res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream' });
-    res.end(body);
-  } catch {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('not found');
-  }
-}).listen(port, () => {
-  console.log(`Twin Meadows is playing at http://localhost:${port}`);
-});
+createServer((req, res) => { void handle(req, res); })
+  .listen(port, () => console.log(`Twin Meadows is playing at http://localhost:${port}`));

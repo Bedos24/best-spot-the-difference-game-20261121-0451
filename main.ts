@@ -1,47 +1,61 @@
-// Twin Meadows — Spot the Difference · the hand-in program (program/v1).
+// Twin Meadows — Spot the Difference · hand-in program (program/v1).
 //
-// The game itself is a static site in game/: no build step, no network, just
-// open game/index.html in a desktop browser. This program is only the
-// delivery van. It copies game/ and screenshots/ into the output directory
-// and writes dossier.json there, produced by buildDossier from the vendored
-// make.fun library, so the dossier is exactly the one the gate rebuilds from
-// the same files.
+// The game is a static site living in game/ (open game/index.html in a
+// desktop browser and play; there is no build step and no network use).
+// This program is the delivery mechanism for the gate: it copies game/
+// — and screenshots/, when the repo carries them — into the output
+// directory, then writes dossier.json there using buildDossier from the
+// vendored make.fun library, so the dossier is built from exactly the
+// files the gate will rebuild it from.
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 //
-// In the grader MAKEFUN_OUTPUT_DIR is unset and the target is /output.
+// With MAKEFUN_OUTPUT_DIR unset the output directory is /output.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const repoDir = fileURLToPath(new URL('.', import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const here = fileURLToPath(new URL('.', import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-// The whole game folder goes across as it stands.
-mkdirSync(outDir, { recursive: true });
-cpSync(join(repoDir, 'game'), join(outDir, 'game'), { recursive: true });
+mkdirSync(out, { recursive: true });
 
-// Screenshots ride along when the repo carries them.
-const shotsDir = join(repoDir, 'screenshots');
-if (existsSync(shotsDir)) {
-  const shotsOut = join(outDir, 'screenshots');
+// The game folder crosses over exactly as it stands.
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+
+// Screenshots are optional cargo: take them when present.
+const shotsHere = join(here, 'screenshots');
+if (existsSync(shotsHere)) {
+  const shotsOut = join(out, 'screenshots');
   mkdirSync(shotsOut, { recursive: true });
-  cpSync(shotsDir, shotsOut, { recursive: true });
+  cpSync(shotsHere, shotsOut, { recursive: true });
 }
 
-// These limits mirror the sealed gate's own caps, so anything written here
-// is already inside them: at most 4 screenshots of 256 KiB each, at most 993
-// entries and 48 MiB under game/, no game path longer than 1000 bytes, and
-// the dossier's text capped at 160 KiB.
-const dossier = buildDossier(outDir, {
+// The caps passed to buildDossier mirror the sealed gate's own limits, so
+// what is written here is already inside them: dossier text at most
+// 160 KiB, at most 4 screenshots of 256 KiB apiece, at most 993 game
+// entries totalling 48 MiB, and no game path longer than 1000 bytes.
+const GATE_LIMITS = {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
   game_path_max_bytes: 1000,
-});
-writeFileSync(join(outDir, 'dossier.json'), dossier);
+};
+const dossierPath = join(out, 'dossier.json');
+writeFileSync(dossierPath, buildDossier(out, GATE_LIMITS));
 
-console.log(`Twin Meadows handed in: game/ + screenshots/ + dossier.json -> ${outDir}`);
+// Report what actually landed: a file count and the dossier's size make
+// gate-side surprises visible in this program's own log line.
+function countFiles(dir) {
+  let n = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    n += entry.isDirectory() ? countFiles(join(dir, entry.name)) : 1;
+  }
+  return n;
+}
+const fileCount = countFiles(out);
+const dossierBytes = statSync(dossierPath).size;
+console.log(`Twin Meadows handed in: ${fileCount} files, dossier.json ${dossierBytes} bytes -> ${out}`);

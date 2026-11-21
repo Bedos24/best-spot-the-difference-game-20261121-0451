@@ -1,336 +1,352 @@
-// Twin Meadows — Spot the Difference: the game controller.
-// Two near-identical cottage scenes stand side by side; the right one hides
-// a handful of changes. Click a change on either picture to ring it on both
-// pictures, and clear the round before your mistakes pile up.
+// Twin Meadows — the controller that ties the game together.
+//
+// Two canvases show the same cottage meadow; the right-hand one is the
+// altered twin. This file owns the play state, the clock, scoring, hints,
+// and the deterministic ?shot= poses the screenshots are taken from.
 
 import { buildScene, makeDifferences, VIEW } from './scene.js';
 import { drawScene, drawMarker } from './render.js';
 import { KeyboardCursor, canvasPoint } from './input.js';
 import { playFind, playMiss, playHint, playWin, playClick, setMuted, isMuted } from './audio.js';
 
-const $ = (id) => document.getElementById(id);
-const leftCanvas = $('leftCanvas');
-const rightCanvas = $('rightCanvas');
-const leftCtx = leftCanvas.getContext('2d');
-const rightCtx = rightCanvas.getContext('2d');
-const SCALE = 2; // the backing store is 1200 x 1200, for crisp lines
-leftCtx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
-rightCtx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+const el = (id) => document.getElementById(id);
+const boardL = el('leftCanvas');
+const boardR = el('rightCanvas');
+const penL = boardL.getContext('2d');
+const penR = boardR.getContext('2d');
 
-// ?shot=… poses deterministic states for the screenshots; ?seed=… fixes the
-// base seed those states (and a normal game) are built from.
-const params = new URLSearchParams(location.search);
-const shotMode = params.get('shot');
-const baseSeed = Number(params.get('seed') ?? 20261121);
+// The canvases' backing store is 1200 x 1200 while the scene grid is
+// 600 x 600, so both pens live under a permanent 2x transform.
+const ZOOM = 2;
+penL.setTransform(ZOOM, 0, 0, ZOOM, 0, 0);
+penR.setTransform(ZOOM, 0, 0, ZOOM, 0, 0);
 
-// All mutable play state lives in this one object.
-const game = {
-  state: 'title', // title | playing | complete
+// URL knobs: ?seed= fixes the base seed (and therefore every round), and
+// ?shot= poses one exact game state for the screenshot script.
+const query = new URLSearchParams(location.search);
+const shotMode = query.get('shot');
+const baseSeed = Number(query.get('seed') ?? 20261121);
+
+// Everything that changes while playing, in one place.
+const play = {
+  phase: 'title', // title -> playing -> complete, per round
   round: 1,
-  score: 0, // banked from finished rounds
-  roundScore: 0, // earned in the round being played
+  banked: 0, // points from finished rounds
+  roundPoints: 0, // points earned in the round under way
   seconds: 0,
-  timerOn: false,
-  misses: 0,
+  clockRunning: false,
+  wrongClicks: 0,
   streak: 0,
   hintsLeft: 2,
-  hintDiff: null,
-  hintUntil: 0,
+  hintTarget: null,
+  hintExpires: 0,
   missMarks: [],
   scene: null,
-  altered: null,
-  differences: [],
-  foundLabels: [],
+  twin: null,
+  diffs: [],
+  foundLog: [],
   lastTick: 0,
 };
 
-// Rounds ask for more differences as they go: 5, 7, 9, then 11 at most.
-function diffCountFor(round) {
-  return Math.min(3 + round * 2, 11);
-}
+// Round n hides 5, 7, 9, then 11 differences; it never asks for more.
+const diffsForRound = (round) => Math.min(3 + round * 2, 11);
 
-function setupRound(round, seedOverride) {
+function startRound(round, seedOverride) {
   const seed = seedOverride ?? baseSeed + round * 7919;
   const scene = buildScene(seed, round - 1);
-  const { altered, differences } = makeDifferences(scene, diffCountFor(round), seed ^ 0x5eed);
-  game.scene = scene;
-  game.altered = altered;
-  game.differences = differences;
-  game.round = round;
-  game.roundScore = 0;
-  game.seconds = 0;
-  game.timerOn = !shotMode;
-  game.misses = 0;
-  game.streak = 0;
-  game.hintsLeft = 2;
-  game.hintDiff = null;
-  game.missMarks = [];
-  game.foundLabels = [];
-  game.state = 'playing';
-  updateHud();
-  renderFoundLog();
-  $('sceneTitle').textContent = scene.theme.title;
+  const made = makeDifferences(scene, diffsForRound(round), seed ^ 0x5eed);
+  play.scene = scene;
+  play.twin = made.altered;
+  play.diffs = made.differences;
+  play.round = round;
+  play.roundPoints = 0;
+  play.seconds = 0;
+  play.clockRunning = !shotMode;
+  play.wrongClicks = 0;
+  play.streak = 0;
+  play.hintsLeft = 2;
+  play.hintTarget = null;
+  play.missMarks = [];
+  play.foundLog = [];
+  play.phase = 'playing';
+  el('sceneTitle').textContent = scene.theme.title;
+  refreshHud();
+  paintFoundLog();
 }
 
-function remaining() {
-  return game.differences.filter((d) => !d.found).length;
+const leftToFind = () => play.diffs.filter((d) => !d.found).length;
+
+function clockText(totalSeconds) {
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const ss = String(Math.floor(totalSeconds % 60)).padStart(2, '0');
+  return `${mm}:${ss}`;
 }
 
-function formatTime(totalSeconds) {
-  const m = Math.floor(totalSeconds / 60);
-  const s = Math.floor(totalSeconds % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+function refreshHud() {
+  el('roundLabel').textContent = `Round ${play.round}`;
+  const streakNote = play.streak >= 2 ? ` · Streak ×${play.streak}` : '';
+  el('scoreLabel').textContent = `Score ${play.banked + play.roundPoints}${streakNote}`;
+  el('toFindLabel').textContent = `${leftToFind()} to find`;
+  el('timeLabel').textContent = clockText(play.seconds);
+  const hintBtn = el('hintButton');
+  hintBtn.textContent = `Hint (${play.hintsLeft})`;
+  hintBtn.disabled = play.hintsLeft <= 0 || play.phase !== 'playing';
 }
 
-function updateHud() {
-  $('roundLabel').textContent = `Round ${game.round}`;
-  const streak = game.streak >= 2 ? ` · Streak ×${game.streak}` : '';
-  $('scoreLabel').textContent = `Score ${game.score + game.roundScore}${streak}`;
-  $('toFindLabel').textContent = `${remaining()} to find`;
-  $('timeLabel').textContent = formatTime(game.seconds);
-  $('hintButton').textContent = `Hint (${game.hintsLeft})`;
-  $('hintButton').disabled = game.hintsLeft <= 0 || game.state !== 'playing';
-}
-
-function renderFoundLog() {
-  $('foundLog').innerHTML = game.foundLabels.length
-    ? game.foundLabels.map((l) => `<span class="found-chip">${l}</span>`).join('')
+function paintFoundLog() {
+  el('foundLog').innerHTML = play.foundLog.length
+    ? play.foundLog.map((label) => `<span class="found-chip">${label}</span>`).join('')
     : '<span class="found-none">Nothing found yet — click a difference in either picture.</span>';
 }
 
-function toast(text, good) {
-  const el = $('toast');
-  el.textContent = text;
-  el.className = `toast show ${good ? 'good' : 'bad'}`;
-  clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => (el.className = 'toast'), 2100);
+let toastTimer = null;
+function announce(text, good) {
+  const box = el('toast');
+  box.textContent = text;
+  box.className = `toast show ${good ? 'good' : 'bad'}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.className = 'toast'; }, 2100);
 }
 
-// A click (or an Enter press) on one panel at scene point (x, y): the
-// nearest unfound difference within its tolerance is a find, anything else
-// is a miss.
-function check(panel, x, y) {
-  if (game.state !== 'playing') return;
-  game.timerOn = true;
-  let best = null;
-  let bestDist = Infinity;
-  for (const d of game.differences) {
+// The heart of the game: a pointer (or Enter) lands at scene point (x, y)
+// on one of the panels. The nearest still-hidden difference within its
+// tolerance scores; anything else is a miss.
+function probe(panel, x, y) {
+  if (play.phase !== 'playing') return;
+  play.clockRunning = true;
+
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const d of play.diffs) {
     if (d.found) continue;
     const dist = Math.hypot(d.x - x, d.y - y);
-    if (dist < bestDist) { bestDist = dist; best = d; }
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearest = d;
+    }
   }
-  const tolerance = best ? Math.max(best.r, 30) + 12 : 0;
-  if (best && bestDist <= tolerance) {
-    best.found = true;
-    game.streak += 1;
-    const gained = 100 + Math.min(game.streak - 1, 4) * 20;
-    game.roundScore += gained;
-    game.foundLabels.unshift(best.label);
+
+  const tolerance = nearest ? Math.max(nearest.r, 30) + 12 : 0;
+  if (nearest && nearestDist <= tolerance) {
+    nearest.found = true;
+    play.streak += 1;
+    const gained = 100 + Math.min(play.streak - 1, 4) * 20;
+    play.roundPoints += gained;
+    play.foundLog.unshift(nearest.label);
     playFind();
-    toast(`Found: ${best.label} (+${gained})`, true);
-    if (remaining() === 0) return completeRound();
+    announce(`Found: ${nearest.label} (+${gained})`, true);
+    if (leftToFind() === 0) {
+      finishRound();
+      return;
+    }
   } else {
-    game.streak = 0;
-    game.misses += 1;
-    game.roundScore = Math.max(0, game.roundScore - 25);
-    game.missMarks.push({ panel, x, y, until: performance.now() + 650 });
+    play.streak = 0;
+    play.wrongClicks += 1;
+    play.roundPoints = Math.max(0, play.roundPoints - 25);
+    play.missMarks.push({ panel, x, y, until: performance.now() + 650 });
     playMiss();
-    toast('Not a difference — minus 25', false);
-    const wrap = panel === 0 ? $('leftWrap') : $('rightWrap');
+    announce('Not a difference — minus 25', false);
+    const wrap = el(panel === 0 ? 'leftWrap' : 'rightWrap');
     wrap.classList.remove('shake');
-    void wrap.offsetWidth; // restart the shake animation
+    void wrap.offsetWidth; // force reflow so the shake animation restarts
     wrap.classList.add('shake');
   }
-  updateHud();
-  renderFoundLog();
+  refreshHud();
+  paintFoundLog();
 }
 
-function completeRound() {
-  const timeBonus = Math.max(0, 300 - Math.floor(game.seconds) * 2);
-  const hintBonus = game.hintsLeft * 50;
-  game.roundScore += timeBonus + hintBonus;
-  const finalRoundScore = game.roundScore;
-  game.score += game.roundScore;
-  game.roundScore = 0; // banked into the total; the HUD shows their sum
-  game.state = 'complete';
-  game.timerOn = false;
+function finishRound() {
+  const timeBonus = Math.max(0, 300 - Math.floor(play.seconds) * 2);
+  const hintBonus = play.hintsLeft * 50;
+  play.roundPoints += timeBonus + hintBonus;
+  const settled = play.roundPoints;
+  play.banked += settled;
+  play.roundPoints = 0; // banked now; the HUD shows the combined total
+  play.phase = 'complete';
+  play.clockRunning = false;
   playWin();
-  $('completeTitle').textContent = `Round ${game.round} complete!`;
-  $('completeStats').innerHTML =
-    `You found all <b>${game.differences.length}</b> differences in <b>${formatTime(game.seconds)}</b> ` +
-    `with <b>${game.misses}</b> wrong clicks.<br>` +
-    `Time bonus +${timeBonus} · Unused hints +${hintBonus} · Round score <b>${finalRoundScore}</b>`;
-  $('completeOverlay').classList.add('show');
-  updateHud();
+  el('completeTitle').textContent = `Round ${play.round} complete!`;
+  el('completeStats').innerHTML =
+    `You found all <b>${play.diffs.length}</b> differences in <b>${clockText(play.seconds)}</b> ` +
+    `with <b>${play.wrongClicks}</b> wrong clicks.<br>` +
+    `Time bonus +${timeBonus} · Unused hints +${hintBonus} · Round score <b>${settled}</b>`;
+  el('completeOverlay').classList.add('show');
+  refreshHud();
 }
 
-// A hint picks one unfound difference at random and makes it glimmer for a
-// moment, at a price.
-function useHint() {
-  if (game.state !== 'playing' || game.hintsLeft <= 0) return;
-  const open = game.differences.filter((d) => !d.found);
-  if (!open.length) return;
-  game.hintsLeft -= 1;
-  game.roundScore = Math.max(0, game.roundScore - 150);
-  game.hintDiff = open[Math.floor(Math.random() * open.length)];
-  game.hintUntil = performance.now() + 1800;
+// A hint costs points and makes one unfound difference glimmer briefly.
+function spendHint() {
+  if (play.phase !== 'playing' || play.hintsLeft <= 0) return;
+  const open = play.diffs.filter((d) => !d.found);
+  if (open.length === 0) return;
+  play.hintsLeft -= 1;
+  play.roundPoints = Math.max(0, play.roundPoints - 150);
+  play.hintTarget = open[Math.floor(Math.random() * open.length)];
+  play.hintExpires = performance.now() + 1800;
   playHint();
-  toast('A difference glimmers… (−150)', true);
-  updateHud();
+  announce('A difference glimmers… (−150)', true);
+  refreshHud();
 }
 
-// One panel: the scene, a pulsing marker on every find, the hint glimmer,
-// any fresh miss crosses, and the keyboard ring when it lives here.
-function drawPanel(ctx, scene, panelIndex, now) {
-  ctx.clearRect(0, 0, VIEW, VIEW);
-  drawScene(ctx, scene, now);
+// Paint one panel: the picture itself, a pulsing ring on every find, the
+// hint glimmer while it lasts, fresh miss crosses, and the keyboard ring
+// when the keyboard player is on this side.
+function paintPanel(pen, scene, panelIndex, now) {
+  pen.clearRect(0, 0, VIEW, VIEW);
+  drawScene(pen, scene, now);
   const pulse = 0.5 + 0.5 * Math.sin(now / 280);
-  for (const d of game.differences) {
-    if (d.found) drawMarker(ctx, d, pulse);
+  for (const d of play.diffs) {
+    if (d.found) drawMarker(pen, d, pulse);
   }
-  if (game.hintDiff && !game.hintDiff.found && now < game.hintUntil) {
-    const d = game.hintDiff;
-    ctx.save();
-    ctx.strokeStyle = `rgba(255, 217, 77, ${0.55 + 0.45 * Math.sin(now / 90)})`;
-    ctx.lineWidth = 5;
-    ctx.setLineDash([10, 8]);
-    ctx.beginPath();
-    ctx.arc(d.x, d.y, Math.max(d.r, 24) + 12, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
+
+  const hint = play.hintTarget;
+  if (hint && !hint.found && now < play.hintExpires) {
+    pen.save();
+    pen.strokeStyle = `rgba(255, 217, 77, ${0.55 + 0.45 * Math.sin(now / 90)})`;
+    pen.lineWidth = 5;
+    pen.setLineDash([10, 8]);
+    pen.beginPath();
+    pen.arc(hint.x, hint.y, Math.max(hint.r, 24) + 12, 0, Math.PI * 2);
+    pen.stroke();
+    pen.restore();
   }
-  for (const mark of game.missMarks) {
+
+  for (const mark of play.missMarks) {
     if (mark.panel !== panelIndex || now > mark.until) continue;
-    ctx.save();
-    ctx.strokeStyle = '#e8323f';
-    ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
-    const r = 13;
-    ctx.beginPath();
-    ctx.moveTo(mark.x - r, mark.y - r);
-    ctx.lineTo(mark.x + r, mark.y + r);
-    ctx.moveTo(mark.x + r, mark.y - r);
-    ctx.lineTo(mark.x - r, mark.y + r);
-    ctx.stroke();
-    ctx.restore();
+    pen.save();
+    pen.strokeStyle = '#e8323f';
+    pen.lineWidth = 6;
+    pen.lineCap = 'round';
+    pen.beginPath();
+    pen.moveTo(mark.x - 13, mark.y - 13);
+    pen.lineTo(mark.x + 13, mark.y + 13);
+    pen.moveTo(mark.x + 13, mark.y - 13);
+    pen.lineTo(mark.x - 13, mark.y + 13);
+    pen.stroke();
+    pen.restore();
   }
-  if (cursor.active && cursor.panel === panelIndex && game.state === 'playing') {
-    cursor.draw(ctx);
+
+  if (ring.active && ring.panel === panelIndex && play.phase === 'playing') {
+    ring.draw(pen);
   }
 }
 
-// The animation loop: advance the clock a second at a time while a round is
-// being played, and repaint both panels every frame.
-function frame(now) {
-  if (game.timerOn && game.state === 'playing') {
-    if (!game.lastTick) {
-      game.lastTick = now;
-    } else if (now - game.lastTick >= 1000) {
-      const elapsed = now - game.lastTick;
-      // A gap of several seconds means the tab was hidden or the machine
-      // slept — requestAnimationFrame stalls then, and that time was not
-      // spent playing, so the clock restarts from this frame rather than
-      // jumping forward by the whole gap.
-      if (elapsed < 5000) {
-        game.seconds += Math.floor(elapsed / 1000);
-        updateHud();
+// The frame loop: advance the round clock in whole seconds while playing,
+// then repaint both panels.
+function tick(now) {
+  if (play.clockRunning && play.phase === 'playing') {
+    if (!play.lastTick) {
+      play.lastTick = now;
+    } else if (now - play.lastTick >= 1000) {
+      const gap = now - play.lastTick;
+      // A multi-second gap means the tab was hidden or the machine slept
+      // (requestAnimationFrame stalls in both cases). That time was not
+      // spent playing, so the clock resumes from this frame instead of
+      // lurching forward by the whole gap.
+      if (gap < 5000) {
+        play.seconds += Math.floor(gap / 1000);
+        refreshHud();
       }
-      game.lastTick = now;
+      play.lastTick = now;
     }
   }
-  if (game.scene) {
-    drawPanel(leftCtx, game.scene, 0, now);
-    drawPanel(rightCtx, game.altered, 1, now);
+  if (play.scene) {
+    paintPanel(penL, play.scene, 0, now);
+    paintPanel(penR, play.twin, 1, now);
   }
-  requestAnimationFrame(frame);
+  requestAnimationFrame(tick);
 }
 
-const cursor = new KeyboardCursor(
-  (panel, x, y) => check(panel, x, y),
-  () => useHint(),
-  () => setupRound(game.round),
+const ring = new KeyboardCursor(
+  (panel, x, y) => probe(panel, x, y),
+  () => spendHint(),
+  () => startRound(play.round),
 );
 
-function onPanelPress(canvas, panel) {
-  canvas.addEventListener('pointerdown', (e) => {
-    const p = canvasPoint(canvas, e.clientX, e.clientY);
-    check(panel, p.x, p.y);
+function wirePanel(canvas, panelIndex) {
+  canvas.addEventListener('pointerdown', (event) => {
+    const p = canvasPoint(canvas, event.clientX, event.clientY);
+    probe(panelIndex, p.x, p.y);
   });
 }
-onPanelPress(leftCanvas, 0);
-onPanelPress(rightCanvas, 1);
+wirePanel(boardL, 0);
+wirePanel(boardR, 1);
 
-window.addEventListener('keydown', (e) => {
-  if (game.state === 'playing' && cursor.handle(e)) updateHud();
+window.addEventListener('keydown', (event) => {
+  if (play.phase === 'playing' && ring.handle(event)) refreshHud();
 });
-$('hintButton').addEventListener('click', () => { playClick(); useHint(); });
-$('restartButton').addEventListener('click', () => { playClick(); setupRound(game.round); });
-$('soundButton').addEventListener('click', (e) => {
+el('hintButton').addEventListener('click', () => { playClick(); spendHint(); });
+el('restartButton').addEventListener('click', () => { playClick(); startRound(play.round); });
+el('soundButton').addEventListener('click', (event) => {
   setMuted(!isMuted());
-  e.currentTarget.textContent = isMuted() ? 'Sound: off' : 'Sound: on';
+  event.currentTarget.textContent = isMuted() ? 'Sound: off' : 'Sound: on';
 });
-$('startButton').addEventListener('click', () => {
+el('startButton').addEventListener('click', () => {
   playClick();
-  $('titleOverlay').classList.remove('show');
-  game.state = 'playing';
-  game.timerOn = true;
+  el('titleOverlay').classList.remove('show');
+  play.phase = 'playing';
+  play.clockRunning = true;
 });
-$('nextButton').addEventListener('click', () => {
+el('nextButton').addEventListener('click', () => {
   playClick();
-  $('completeOverlay').classList.remove('show');
-  setupRound(game.round + 1);
+  el('completeOverlay').classList.remove('show');
+  startRound(play.round + 1);
 });
 
-// Screenshot states: exact, deterministic poses of real game states, used
-// by the maker's screenshot script (see shots.json). Not part of normal play.
-function applyShotMode() {
-  $('titleOverlay').classList.remove('show');
+// --- Screenshot poses ---------------------------------------------------------
+// Deterministic, exact states for the maker's screenshot script (see
+// shots.json). These are poses of the real game, not a separate mode of
+// play: each one starts a genuine round and then applies clicks' worth of
+// state by hand.
+
+function poseShot() {
+  el('titleOverlay').classList.remove('show');
   if (shotMode === 'play') {
-    setupRound(2);
-    const firstThree = game.differences.slice(0, 3);
-    firstThree.forEach((d) => { d.found = true; });
-    game.foundLabels = firstThree.map((d) => d.label);
-    game.seconds = 47;
-    game.roundScore = 340;
-    game.misses = 1;
-    updateHud();
-    renderFoundLog();
+    startRound(2);
+    const firstThree = play.diffs.slice(0, 3);
+    for (const d of firstThree) d.found = true;
+    play.foundLog = firstThree.map((d) => d.label);
+    play.seconds = 47;
+    play.roundPoints = 340;
+    play.wrongClicks = 1;
+    refreshHud();
+    paintFoundLog();
   } else if (shotMode === 'night') {
-    setupRound(3);
-    for (const d of game.differences.slice(0, 4)) {
+    startRound(3);
+    for (const d of play.diffs.slice(0, 4)) {
       d.found = true;
-      game.foundLabels.unshift(d.label);
+      play.foundLog.unshift(d.label);
     }
-    game.seconds = 65;
-    game.roundScore = 460;
-    game.misses = 2;
-    game.streak = 3;
-    updateHud();
-    renderFoundLog();
+    play.seconds = 65;
+    play.roundPoints = 460;
+    play.wrongClicks = 2;
+    play.streak = 3;
+    refreshHud();
+    paintFoundLog();
   } else if (shotMode === 'complete') {
-    setupRound(1);
-    game.differences.forEach((d) => { d.found = true; });
-    game.differences.forEach((d) => game.foundLabels.unshift(d.label));
-    game.seconds = 83;
-    game.misses = 2;
-    game.hintsLeft = 1;
-    game.roundScore = 500;
-    renderFoundLog();
-    completeRound();
+    startRound(1);
+    for (const d of play.diffs) {
+      d.found = true;
+      play.foundLog.unshift(d.label);
+    }
+    play.seconds = 83;
+    play.wrongClicks = 2;
+    play.hintsLeft = 1;
+    play.roundPoints = 500;
+    paintFoundLog();
+    finishRound();
   } else {
-    setupRound(1);
-    game.state = 'title';
-    game.timerOn = false;
-    $('titleOverlay').classList.add('show');
+    poseTitle();
   }
 }
 
-if (shotMode) {
-  applyShotMode();
-} else {
-  setupRound(1);
-  game.state = 'title';
-  game.timerOn = false;
-  $('titleOverlay').classList.add('show');
+function poseTitle() {
+  startRound(1);
+  play.phase = 'title';
+  play.clockRunning = false;
+  el('titleOverlay').classList.add('show');
 }
-requestAnimationFrame(frame);
+
+if (shotMode) poseShot();
+else poseTitle();
+requestAnimationFrame(tick);

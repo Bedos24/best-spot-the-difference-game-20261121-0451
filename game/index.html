@@ -1,72 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Twin Meadows — Spot the Difference</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+  <title>Twin Meadows — Spot the Difference</title>
+  <link href="style.css" rel="stylesheet">
 </head>
 <body>
+
+  <!-- Header: game name on the left, live score pills on the right. -->
   <header class="topbar">
     <div class="brand">
       <h1>Twin Meadows</h1>
       <p class="tagline">Spot the Difference</p>
     </div>
     <div class="hud" role="status">
-      <span class="pill" id="roundLabel">Round 1</span>
-      <span class="pill" id="scoreLabel">Score 0</span>
-      <span class="pill" id="timeLabel">00:00</span>
-      <span class="pill accent" id="toFindLabel">5 to find</span>
+      <span id="roundLabel" class="pill">Round 1</span>
+      <span id="scoreLabel" class="pill">Score 0</span>
+      <span id="timeLabel" class="pill">00:00</span>
+      <span id="toFindLabel" class="pill accent">5 to find</span>
     </div>
   </header>
 
-  <p class="scene-title" id="sceneTitle">Meadow Cottage — Morning</p>
+  <p id="sceneTitle" class="scene-title">Meadow Cottage — Morning</p>
 
+  <!-- The two pictures. Both canvases share one scene; the right-hand
+       one is the altered twin. -->
   <main class="stage">
-    <figure class="panel-wrap" id="leftWrap">
-      <canvas id="leftCanvas" width="1200" height="1200" aria-label="Original picture"></canvas>
+    <figure id="leftWrap" class="panel-wrap">
+      <canvas id="leftCanvas" height="1200" width="1200" aria-label="Original picture"></canvas>
       <figcaption>Original</figcaption>
     </figure>
-    <figure class="panel-wrap" id="rightWrap">
-      <canvas id="rightCanvas" width="1200" height="1200" aria-label="Altered picture"></canvas>
+    <figure id="rightWrap" class="panel-wrap">
+      <canvas id="rightCanvas" height="1200" width="1200" aria-label="Altered picture"></canvas>
       <figcaption>Find the changes</figcaption>
     </figure>
   </main>
 
-  <div class="toast" id="toast" aria-live="polite"></div>
-  <div class="found-log" id="foundLog"></div>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <div id="foundLog" class="found-log"></div>
 
+  <!-- Round controls and the keyboard cheat-sheet. -->
   <footer class="controls">
-    <button id="hintButton" type="button">Hint (2)</button>
-    <button id="restartButton" type="button">Restart round</button>
-    <button id="soundButton" type="button">Sound: on</button>
+    <button type="button" id="hintButton">Hint (2)</button>
+    <button type="button" id="restartButton">Restart round</button>
+    <button type="button" id="soundButton">Sound: on</button>
     <span class="keys-help">Keys: arrows move the ring · Enter checks · Tab swaps picture · H hint · R restart</span>
   </footer>
 
-  <div class="overlay show" id="titleOverlay">
+  <!-- Title card, shown over the first round until play starts. -->
+  <div id="titleOverlay" class="overlay show">
     <div class="card">
       <h2>Twin Meadows</h2>
       <p class="card-sub">Spot the Difference</p>
-      <p>Two pictures of one cottage meadow — nearly. The right-hand picture
-         hides a few quiet changes: a bird gone, a colour swapped, a cat that
-         slipped in. Click a change in <b>either</b> picture to ring it on both.</p>
+      <p>Two pictures of one cottage
+         meadow — nearly. The right-hand picture hides a few quiet
+         changes: a bird gone, a colour swapped, a cat that slipped
+         in. Click a change in <b>either</b> picture to ring it on both.</p>
       <ul class="rules">
         <li>Every find scores 100, and a run of finds scores extra.</li>
         <li>A wrong click costs 25. A hint costs 150 — two per round.</li>
         <li>Find every change to finish the round and earn a time bonus.</li>
       </ul>
-      <button id="startButton" type="button" class="big">Start spotting</button>
+      <button type="button" id="startButton" class="big">Start spotting</button>
     </div>
   </div>
 
-  <div class="overlay" id="completeOverlay">
+  <!-- Round-complete card. -->
+  <div id="completeOverlay" class="overlay">
     <div class="card">
       <h2 id="completeTitle">Round complete!</h2>
       <p id="completeStats"></p>
-      <button id="nextButton" type="button" class="big">Next round</button>
+      <button type="button" id="nextButton" class="big">Next round</button>
     </div>
   </div>
 
-  <script type="module" src="src/main.js"></script>
+  <script src="src/main.js" type="module"></script>
 </body>
 </html>

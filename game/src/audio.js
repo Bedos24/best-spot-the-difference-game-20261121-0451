@@ -1,70 +1,78 @@
-// Sound, synthesized live with WebAudio — the game ships no audio files.
-// One lazy AudioContext, a mute flag, and a handful of little tunes built
-// from single tones.
+// All of the game's sound is synthesized in the browser with WebAudio;
+// there are no audio files to ship. A single context is created lazily on
+// first use, and every effect is a short sequence of bare tones.
 
-let context = null;
-let muted = false;
+let sharedCtx = null;
+let silenced = false;
 
-function audioContext() {
-  if (!context) context = new (window.AudioContext || window.webkitAudioContext)();
-  if (context.state === 'suspended') context.resume();
-  return context;
+function ctx() {
+  if (sharedCtx === null) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    sharedCtx = new AC();
+  }
+  if (sharedCtx.state === 'suspended') sharedCtx.resume();
+  return sharedCtx;
 }
 
 export function setMuted(value) {
-  muted = value;
+  silenced = value;
 }
 
 export function isMuted() {
-  return muted;
+  return silenced;
 }
 
-// One soft blip: frequency, delay from now, length, wave shape, loudness.
-function tone(freq, delay, dur, type = 'sine', gain = 0.16) {
-  if (muted) return;
+// Play one tone. `when` is seconds from now, `len` the audible length; the
+// envelope swells in fast and decays exponentially so notes never click.
+function blip(freq, { when = 0, len = 0.12, wave = 'sine', vol = 0.16 } = {}) {
+  if (silenced) return;
   try {
-    const ac = audioContext();
+    const ac = ctx();
+    const start = ac.currentTime + when;
     const osc = ac.createOscillator();
     const amp = ac.createGain();
-    const t0 = ac.currentTime + delay;
-    osc.type = type;
+    osc.type = wave;
     osc.frequency.value = freq;
-    amp.gain.setValueAtTime(0.0001, t0);
-    amp.gain.exponentialRampToValueAtTime(gain, t0 + 0.015);
-    amp.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(amp).connect(ac.destination);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.05);
+    amp.gain.setValueAtTime(0.0001, start);
+    amp.gain.exponentialRampToValueAtTime(vol, start + 0.015);
+    amp.gain.exponentialRampToValueAtTime(0.0001, start + len);
+    osc.connect(amp);
+    amp.connect(ac.destination);
+    osc.start(start);
+    osc.stop(start + len + 0.05);
   } catch {
-    // Sound is a garnish. If the browser refuses it, the game plays on.
+    // Audio is decoration only; a browser that refuses it changes nothing.
   }
 }
 
-// A rising three-note chirp when a difference is found.
+// Run a little tune: [frequency, delay, length] triples over one wave/vol.
+function tune(notes, wave, vol) {
+  for (const [freq, when, len] of notes) blip(freq, { when, len, wave, vol });
+}
+
+// Found a difference: a rising three-note chirp.
 export function playFind() {
-  tone(660, 0, 0.12);
-  tone(880, 0.09, 0.14);
-  tone(1320, 0.18, 0.2);
+  tune([[660, 0, 0.12], [880, 0.09, 0.14], [1320, 0.18, 0.2]], 'sine', 0.16);
 }
 
-// A low double buzz for a wrong click.
+// Wrong click: a low, square double-buzz.
 export function playMiss() {
-  tone(160, 0, 0.16, 'square', 0.07);
-  tone(120, 0.08, 0.18, 'square', 0.06);
+  blip(160, { len: 0.16, wave: 'square', vol: 0.07 });
+  blip(120, { when: 0.08, len: 0.18, wave: 'square', vol: 0.06 });
 }
 
-// Two bright pings when a hint glimmers.
+// Hint: the same bright ping twice.
 export function playHint() {
-  tone(1046, 0, 0.1, 'triangle');
-  tone(1046, 0.16, 0.1, 'triangle');
+  tune([[1046, 0, 0.1], [1046, 0.16, 0.1]], 'triangle', 0.16);
 }
 
-// A short fanfare arpeggio for finishing a round.
+// Round finished: a six-note fanfare that climbs, dips and climbs again.
 export function playWin() {
-  [523, 659, 784, 1046, 784, 1046].forEach((f, i) => tone(f, i * 0.11, 0.22, 'triangle', 0.15));
+  const melody = [523, 659, 784, 1046, 784, 1046];
+  melody.forEach((freq, i) => blip(freq, { when: i * 0.11, len: 0.22, wave: 'triangle', vol: 0.15 }));
 }
 
-// A quiet tick for button presses.
+// Button press: one quiet tick.
 export function playClick() {
-  tone(440, 0, 0.05, 'triangle', 0.06);
+  blip(440, { len: 0.05, wave: 'triangle', vol: 0.06 });
 }

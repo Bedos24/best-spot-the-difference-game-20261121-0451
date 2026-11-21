@@ -1,535 +1,494 @@
-// Canvas rendering for one scene variant. Everything is painted from the
-// scene's item list in scene coordinates (600 x 600); the caller has already
-// scaled the context, so this file never thinks about pixels on the page.
+// Painting scenes onto canvas.
+//
+// drawScene receives a 2d context already transformed into scene space
+// (600 x 600) and walks the scene's item list, handing each item to the
+// painter registered for its kind in ART below. Two kinds break the
+// one-argument pattern — the chimney is placed relative to the cottage
+// body, and flower patches loop over their own offsets — so drawScene
+// special-cases them.
 
-// Small shape helpers: each sets up a path and fills it in the current style.
-function disc(ctx, x, y, r) {
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
+// -- Tiny filled-shape shortcuts ---------------------------------------------
+// Each one opens a path, traces the shape and fills it with whatever
+// fillStyle is current; callers set the style first.
+
+function dot(g, cx, cy, r) {
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fill();
 }
 
-function oval(ctx, x, y, rx, ry) {
-  ctx.beginPath();
-  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
+function egg(g, cx, cy, rx, ry) {
+  g.beginPath();
+  g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  g.fill();
 }
 
-function roundedBox(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-  ctx.fill();
+function panel(g, x, y, w, h, r) {
+  g.beginPath();
+  g.roundRect(x, y, w, h, r);
+  g.fill();
 }
 
-// The backdrop: sky gradient, two hill silhouettes, the meadow, and the pond
-// in the bottom-right corner. `phase` animates only these background strokes
-// (the pond ripples), never anything a player can click.
-function paintBackground(ctx, theme, phase = 0) {
-  const sky = ctx.createLinearGradient(0, 0, 0, 400);
-  theme.sky.forEach((stop, i) => sky.addColorStop(i / (theme.sky.length - 1), stop));
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, 600, 400);
+function tri(g, pts) {
+  g.beginPath();
+  g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i += 1) g.lineTo(pts[i][0], pts[i][1]);
+  g.closePath();
+  g.fill();
+}
 
-  ctx.fillStyle = theme.hillFar;
-  ctx.beginPath();
-  ctx.moveTo(0, 400);
-  ctx.quadraticCurveTo(120, 300, 260, 372);
-  ctx.quadraticCurveTo(400, 428, 600, 348);
-  ctx.lineTo(600, 400);
-  ctx.closePath();
-  ctx.fill();
+// -- The backdrop --------------------------------------------------------------
+// Sky, two hill silhouettes, meadow, pond. The only motion in the whole
+// game lives here: `phase` nudges the pond ripples, and ripples are never
+// something a difference can hide in.
 
-  ctx.fillStyle = theme.hillNear;
-  ctx.beginPath();
-  ctx.moveTo(0, 400);
-  ctx.quadraticCurveTo(180, 348, 340, 392);
-  ctx.quadraticCurveTo(480, 424, 600, 386);
-  ctx.lineTo(600, 400);
-  ctx.closePath();
-  ctx.fill();
+function hill(g, colour, c1, e1, c2, e2) {
+  g.fillStyle = colour;
+  g.beginPath();
+  g.moveTo(0, 400);
+  g.quadraticCurveTo(c1[0], c1[1], e1[0], e1[1]);
+  g.quadraticCurveTo(c2[0], c2[1], e2[0], e2[1]);
+  g.lineTo(600, 400);
+  g.closePath();
+  g.fill();
+}
 
-  const grass = ctx.createLinearGradient(0, 392, 0, 600);
-  grass.addColorStop(0, theme.grass[0]);
-  grass.addColorStop(1, theme.grass[1]);
-  ctx.fillStyle = grass;
-  ctx.fillRect(0, 392, 600, 208);
+function paintBackdrop(g, th, phase) {
+  const skyGrad = g.createLinearGradient(0, 0, 0, 400);
+  th.sky.forEach((colour, i) => skyGrad.addColorStop(i / (th.sky.length - 1), colour));
+  g.fillStyle = skyGrad;
+  g.fillRect(0, 0, 600, 400);
 
-  ctx.fillStyle = theme.pondEdge;
-  oval(ctx, 468, 522, 128, 60);
-  ctx.fillStyle = theme.pond;
-  oval(ctx, 468, 518, 120, 54);
+  hill(g, th.hillFar, [120, 300], [260, 372], [400, 428], [600, 348]);
+  hill(g, th.hillNear, [180, 348], [340, 392], [480, 424], [600, 386]);
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 2;
-  for (const [x, y, rx] of [[420, 506, 22], [505, 534, 28], [452, 544, 14]]) {
-    const drift = Math.sin(phase + x) * 5;
-    ctx.beginPath();
-    ctx.ellipse(x + drift, y, rx + Math.sin(phase * 1.4 + y) * 3, 5, 0, 0, Math.PI * 2);
-    ctx.stroke();
+  const grassGrad = g.createLinearGradient(0, 392, 0, 600);
+  grassGrad.addColorStop(0, th.grass[0]);
+  grassGrad.addColorStop(1, th.grass[1]);
+  g.fillStyle = grassGrad;
+  g.fillRect(0, 392, 600, 208);
+
+  g.fillStyle = th.pondEdge;
+  egg(g, 468, 522, 128, 60);
+  g.fillStyle = th.pond;
+  egg(g, 468, 518, 120, 54);
+
+  g.strokeStyle = 'rgba(255,255,255,0.35)';
+  g.lineWidth = 2;
+  const ripples = [[420, 506, 22], [505, 534, 28], [452, 544, 14]];
+  for (const [rx, ry, rw] of ripples) {
+    const wobble = Math.sin(phase * 1.4 + ry) * 3;
+    g.beginPath();
+    g.ellipse(rx + Math.sin(phase + rx) * 5, ry, rw + wobble, 5, 0, 0, Math.PI * 2);
+    g.stroke();
   }
 }
 
-function paintSun(ctx, it) {
-  if (it.rays) {
-    ctx.strokeStyle = '#ffb52e';
-    ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + 0.4;
-      ctx.beginPath();
-      ctx.moveTo(it.x + Math.cos(a) * 44, it.y + Math.sin(a) * 44);
-      ctx.lineTo(it.x + Math.cos(a) * 58, it.y + Math.sin(a) * 58);
-      ctx.stroke();
+// -- Painters, one per item kind ------------------------------------------------
+
+const ART = {
+  sun(g, it) {
+    if (it.rays) {
+      g.strokeStyle = '#ffb52e';
+      g.lineWidth = 6;
+      g.lineCap = 'round';
+      for (let k = 0; k < 8; k += 1) {
+        const ang = (k / 8) * Math.PI * 2 + 0.4;
+        g.beginPath();
+        g.moveTo(it.x + Math.cos(ang) * 44, it.y + Math.sin(ang) * 44);
+        g.lineTo(it.x + Math.cos(ang) * 58, it.y + Math.sin(ang) * 58);
+        g.stroke();
+      }
     }
-  }
-  ctx.fillStyle = '#ffd94d';
-  disc(ctx, it.x, it.y, 34);
-  ctx.fillStyle = '#ffdf7e';
-  disc(ctx, it.x - 8, it.y - 8, 24);
-  if (it.face) {
-    ctx.fillStyle = '#8a5a12';
-    disc(ctx, it.x - 11, it.y - 3, 3.4);
-    disc(ctx, it.x + 11, it.y - 3, 3.4);
-    ctx.strokeStyle = '#8a5a12';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(it.x, it.y + 4, 13, 0.25, Math.PI - 0.25);
-    ctx.stroke();
-  }
-}
-
-function paintMoon(ctx, it) {
-  ctx.fillStyle = '#f4f1de';
-  disc(ctx, it.x, it.y, 30);
-  ctx.fillStyle = '#e6e1c8';
-  disc(ctx, it.x - 12, it.y - 10, 20);
-  if (it.craters) {
-    ctx.fillStyle = '#d8d2b4';
-    disc(ctx, it.x + 8, it.y + 6, 6);
-    disc(ctx, it.x - 4, it.y + 14, 4.4);
-    disc(ctx, it.x + 14, it.y - 12, 4.8);
-  }
-}
-
-function paintCloud(ctx, it) {
-  ctx.fillStyle = it.tint;
-  const s = it.s;
-  oval(ctx, it.x, it.y, 40 * s, 20 * s);
-  oval(ctx, it.x - 26 * s, it.y + 5 * s, 26 * s, 15 * s);
-  oval(ctx, it.x + 27 * s, it.y + 5 * s, 28 * s, 16 * s);
-  oval(ctx, it.x + 2 * s, it.y - 11 * s, 27 * s, 17 * s);
-}
-
-function paintBird(ctx, it) {
-  ctx.strokeStyle = it.color;
-  ctx.lineWidth = 3.4;
-  ctx.lineCap = 'round';
-  const s = it.s;
-  ctx.beginPath();
-  ctx.moveTo(it.x - 13 * s, it.y);
-  ctx.quadraticCurveTo(it.x - 5 * s, it.y - 9 * s, it.x, it.y);
-  ctx.quadraticCurveTo(it.x + 5 * s, it.y - 9 * s, it.x + 13 * s, it.y);
-  ctx.stroke();
-}
-
-function paintStar(ctx, it) {
-  ctx.fillStyle = '#ffeeb0';
-  const s = it.s;
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
-    const r = i % 2 === 0 ? s : s * 0.45;
-    const px = it.x + Math.cos(a) * r;
-    const py = it.y + Math.sin(a) * r;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fill();
-}
-
-function paintRainbow(ctx, it) {
-  const bands = ['#e84f4f', '#ff8c42', '#ffd94d', '#63c96b', '#4f9de8', '#b07fe8'];
-  ctx.lineWidth = 11;
-  bands.forEach((band, i) => {
-    ctx.strokeStyle = band;
-    ctx.globalAlpha = 0.75;
-    ctx.beginPath();
-    ctx.arc(it.x, it.y, 196 - i * 11, Math.PI, Math.PI * 2);
-    ctx.stroke();
-  });
-  ctx.globalAlpha = 1;
-}
-
-function paintKite(ctx, it) {
-  ctx.save();
-  ctx.translate(it.x, it.y);
-  ctx.rotate(0.5);
-  ctx.fillStyle = it.color;
-  ctx.beginPath();
-  ctx.moveTo(0, -22);
-  ctx.lineTo(16, 0);
-  ctx.lineTo(0, 22);
-  ctx.lineTo(-16, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.beginPath();
-  ctx.moveTo(0, -22);
-  ctx.lineTo(16, 0);
-  ctx.lineTo(0, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-  // The string, then the little bows tied along it when the kite has a tail.
-  ctx.strokeStyle = 'rgba(60,60,70,0.65)';
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(it.x + 8, it.y + 18);
-  ctx.quadraticCurveTo(it.x + 20, it.y + 52, it.x + 6, it.y + 84);
-  ctx.stroke();
-  if (it.tail) {
-    ctx.fillStyle = it.color;
-    for (let i = 0; i < 3; i++) {
-      const t = i / 3;
-      const bx = it.x + 8 + Math.sin(t * 4) * 7 + t * -2;
-      const by = it.y + 30 + t * 48;
-      ctx.save();
-      ctx.translate(bx, by);
-      ctx.rotate(0.6);
-      ctx.fillRect(-5, -3, 10, 6);
-      ctx.restore();
+    g.fillStyle = '#ffd94d';
+    dot(g, it.x, it.y, 34);
+    g.fillStyle = '#ffdf7e';
+    dot(g, it.x - 8, it.y - 8, 24);
+    if (it.face) {
+      g.fillStyle = '#8a5a12';
+      dot(g, it.x - 11, it.y - 3, 3.4);
+      dot(g, it.x + 11, it.y - 3, 3.4);
+      g.strokeStyle = '#8a5a12';
+      g.lineWidth = 3;
+      g.beginPath();
+      g.arc(it.x, it.y + 4, 13, 0.25, Math.PI - 0.25);
+      g.stroke();
     }
-  }
-}
+  },
 
-function paintHouseBody(ctx, it) {
-  ctx.fillStyle = 'rgba(0,0,0,0.12)';
-  oval(ctx, it.x0 + it.w / 2, it.y0 + it.h + 8, it.w * 0.58, 10);
-  ctx.fillStyle = it.wall;
-  roundedBox(ctx, it.x0, it.y0, it.w, it.h, 6);
-  ctx.fillStyle = 'rgba(0,0,0,0.08)';
-  ctx.fillRect(it.x0, it.y0 + it.h - 12, it.w, 12);
-}
+  moon(g, it) {
+    g.fillStyle = '#f4f1de';
+    dot(g, it.x, it.y, 30);
+    g.fillStyle = '#e6e1c8';
+    dot(g, it.x - 12, it.y - 10, 20);
+    if (it.craters) {
+      g.fillStyle = '#d8d2b4';
+      dot(g, it.x + 8, it.y + 6, 6);
+      dot(g, it.x - 4, it.y + 14, 4.4);
+      dot(g, it.x + 14, it.y - 12, 4.8);
+    }
+  },
 
-function paintRoof(ctx, it) {
-  ctx.fillStyle = it.color;
-  ctx.beginPath();
-  ctx.moveTo(it.x0 - 14, it.y0 + 6);
-  ctx.lineTo(it.x0 + it.w / 2, it.y0 - 52);
-  ctx.lineTo(it.x0 + it.w + 14, it.y0 + 6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.16)';
-  ctx.beginPath();
-  ctx.moveTo(it.x0 - 14, it.y0 + 6);
-  ctx.lineTo(it.x0 + it.w / 2, it.y0 - 52);
-  ctx.lineTo(it.x0 + it.w / 2, it.y0 + 6);
-  ctx.closePath();
-  ctx.fill();
-}
+  star(g, it) {
+    g.fillStyle = '#ffeeb0';
+    g.beginPath();
+    for (let k = 0; k < 10; k += 1) {
+      const ang = (k / 10) * Math.PI * 2 - Math.PI / 2;
+      const rad = k % 2 === 0 ? it.s : it.s * 0.45;
+      const px = it.x + Math.cos(ang) * rad;
+      const py = it.y + Math.sin(ang) * rad;
+      if (k === 0) g.moveTo(px, py);
+      else g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+  },
 
-// The chimney is positioned from the house body, not from its own item,
-// so drawScene passes the body along.
-function paintChimney(ctx, it, house) {
+  cloud(g, it) {
+    const s = it.s;
+    g.fillStyle = it.tint;
+    egg(g, it.x, it.y, 40 * s, 20 * s);
+    egg(g, it.x - 26 * s, it.y + 5 * s, 26 * s, 15 * s);
+    egg(g, it.x + 27 * s, it.y + 5 * s, 28 * s, 16 * s);
+    egg(g, it.x + 2 * s, it.y - 11 * s, 27 * s, 17 * s);
+  },
+
+  bird(g, it) {
+    const s = it.s;
+    g.strokeStyle = it.color;
+    g.lineWidth = 3.4;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(it.x - 13 * s, it.y);
+    g.quadraticCurveTo(it.x - 5 * s, it.y - 9 * s, it.x, it.y);
+    g.quadraticCurveTo(it.x + 5 * s, it.y - 9 * s, it.x + 13 * s, it.y);
+    g.stroke();
+  },
+
+  rainbow(g, it) {
+    const bands = ['#e84f4f', '#ff8c42', '#ffd94d', '#63c96b', '#4f9de8', '#b07fe8'];
+    g.lineWidth = 11;
+    bands.forEach((colour, i) => {
+      g.strokeStyle = colour;
+      g.globalAlpha = 0.75;
+      g.beginPath();
+      g.arc(it.x, it.y, 196 - i * 11, Math.PI, Math.PI * 2);
+      g.stroke();
+    });
+    g.globalAlpha = 1;
+  },
+
+  kite(g, it) {
+    g.save();
+    g.translate(it.x, it.y);
+    g.rotate(0.5);
+    g.fillStyle = it.color;
+    tri(g, [[0, -22], [16, 0], [0, 22], [-16, 0]]);
+    g.fillStyle = 'rgba(255,255,255,0.5)';
+    tri(g, [[0, -22], [16, 0], [0, 0]]);
+    g.restore();
+
+    g.strokeStyle = 'rgba(60,60,70,0.65)';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(it.x + 8, it.y + 18);
+    g.quadraticCurveTo(it.x + 20, it.y + 52, it.x + 6, it.y + 84);
+    g.stroke();
+
+    if (it.tail) {
+      g.fillStyle = it.color;
+      for (let k = 0; k < 3; k += 1) {
+        const t = k / 3;
+        g.save();
+        g.translate(it.x + 8 + Math.sin(t * 4) * 7 + t * -2, it.y + 30 + t * 48);
+        g.rotate(0.6);
+        g.fillRect(-5, -3, 10, 6);
+        g.restore();
+      }
+    }
+  },
+
+  houseBody(g, it) {
+    g.fillStyle = 'rgba(0,0,0,0.12)';
+    egg(g, it.x0 + it.w / 2, it.y0 + it.h + 8, it.w * 0.58, 10);
+    g.fillStyle = it.wall;
+    panel(g, it.x0, it.y0, it.w, it.h, 6);
+    g.fillStyle = 'rgba(0,0,0,0.08)';
+    g.fillRect(it.x0, it.y0 + it.h - 12, it.w, 12);
+  },
+
+  roof(g, it) {
+    const apex = [it.x0 + it.w / 2, it.y0 - 52];
+    g.fillStyle = it.color;
+    tri(g, [[it.x0 - 14, it.y0 + 6], apex, [it.x0 + it.w + 14, it.y0 + 6]]);
+    g.fillStyle = 'rgba(255,255,255,0.16)';
+    tri(g, [[it.x0 - 14, it.y0 + 6], apex, [it.x0 + it.w / 2, it.y0 + 6]]);
+  },
+
+  window(g, it) {
+    g.fillStyle = '#6b4a2f';
+    panel(g, it.x - 13, it.y - 15, 26, 30, 4);
+    g.fillStyle = it.lit ? '#ffd94d' : '#bcd9ea';
+    g.fillRect(it.x - 10, it.y - 12, 20, 24);
+    g.strokeStyle = '#6b4a2f';
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(it.x, it.y - 12);
+    g.lineTo(it.x, it.y + 12);
+    g.moveTo(it.x - 10, it.y);
+    g.lineTo(it.x + 10, it.y);
+    g.stroke();
+    if (it.lit) {
+      g.fillStyle = 'rgba(255,217,77,0.25)';
+      dot(g, it.x, it.y, 24);
+    }
+  },
+
+  door(g, it) {
+    g.fillStyle = '#5d3d22';
+    panel(g, it.x - 15, it.y - 32, 30, 64, 5);
+    g.fillStyle = it.open ? '#2e1d10' : it.color;
+    panel(g, it.x - 12, it.y - 29, 24, 58, 4);
+    g.fillStyle = '#ffd94d';
+    dot(g, it.open ? it.x - 8 : it.x + 7, it.y + 2, 2.8);
+  },
+
+  flowerBox(g, it) {
+    g.fillStyle = '#8a5a33';
+    g.fillRect(it.x - 14, it.y - 2, 28, 9);
+    for (let k = 0; k < 3; k += 1) {
+      const fx = it.x - 9 + k * 9;
+      g.strokeStyle = '#3f9142';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(fx, it.y - 2);
+      g.lineTo(fx, it.y - 9);
+      g.stroke();
+      g.fillStyle = it.color;
+      dot(g, fx, it.y - 11, 4);
+    }
+  },
+
+  cat(g, it) {
+    g.fillStyle = it.color;
+    egg(g, it.x, it.y - 6, 13, 8);
+    dot(g, it.x + 11, it.y - 13, 7);
+    g.beginPath();
+    g.moveTo(it.x + 6, it.y - 17);
+    g.lineTo(it.x + 8, it.y - 23);
+    g.lineTo(it.x + 11, it.y - 18);
+    g.moveTo(it.x + 12, it.y - 18);
+    g.lineTo(it.x + 15, it.y - 23);
+    g.lineTo(it.x + 17, it.y - 17);
+    g.fill();
+    g.strokeStyle = it.color;
+    g.lineWidth = 3.4;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(it.x - 12, it.y - 8);
+    g.quadraticCurveTo(it.x - 20, it.y - 14, it.x - 17, it.y - 22);
+    g.stroke();
+  },
+
+  laundry(g, it) {
+    const left = it.x - 62;
+    const right = it.x + 62;
+    const lineY = it.y - 44;
+    g.strokeStyle = '#7a6a55';
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(left, lineY + 62);
+    g.lineTo(left, lineY);
+    g.moveTo(right, lineY + 62);
+    g.lineTo(right, lineY);
+    g.stroke();
+    g.strokeStyle = 'rgba(50,40,30,0.7)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(left, lineY);
+    g.lineTo(right, lineY);
+    g.stroke();
+
+    const n = it.shirts.length;
+    it.shirts.forEach((colour, i) => {
+      const sx = left + ((i + 0.5) / n) * (right - left);
+      g.fillStyle = colour;
+      panel(g, sx - 13, lineY + 2, 26, 30, 4);
+      g.fillStyle = 'rgba(0,0,0,0.10)';
+      g.fillRect(sx - 13, lineY + 24, 26, 8);
+    });
+  },
+
+  tree(g, it) {
+    // Trunk first, then the swing that hangs off it, then the canopy.
+    g.fillStyle = '#7a4a2b';
+    g.beginPath();
+    g.moveTo(it.x - 9, it.y + 66);
+    g.quadraticCurveTo(it.x - 4, it.y, it.x - 12, it.y - 26);
+    g.lineTo(it.x + 12, it.y - 26);
+    g.quadraticCurveTo(it.x + 4, it.y, it.x + 9, it.y + 66);
+    g.closePath();
+    g.fill();
+
+    if (it.swing) {
+      g.strokeStyle = 'rgba(60,40,20,0.8)';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(it.x - 34, it.y - 18);
+      g.lineTo(it.x - 34, it.y + 22);
+      g.moveTo(it.x - 14, it.y - 18);
+      g.lineTo(it.x - 14, it.y + 22);
+      g.stroke();
+      g.fillStyle = '#a5713d';
+      g.fillRect(it.x - 40, it.y + 22, 32, 6);
+    }
+
+    g.fillStyle = it.foliage;
+    dot(g, it.x, it.y - 62, 44);
+    dot(g, it.x - 36, it.y - 34, 32);
+    dot(g, it.x + 36, it.y - 34, 32);
+    dot(g, it.x, it.y - 30, 36);
+    g.fillStyle = 'rgba(255,255,255,0.10)';
+    dot(g, it.x - 14, it.y - 70, 22);
+
+    // Apples sit on fixed hooks in the canopy, so a changed count never
+    // looks like the remaining apples moved house.
+    const hooks = [[-24, -48], [16, -66], [30, -30], [-6, -26], [-34, -22], [8, -84], [38, -52], [-16, -70]];
+    g.fillStyle = it.appleColor;
+    const shown = Math.min(it.apples, hooks.length);
+    for (let k = 0; k < shown; k += 1) dot(g, it.x + hooks[k][0], it.y + hooks[k][1], 5.4);
+  },
+
+  fence(g, it) {
+    const startX = it.x - 66;
+    const spacing = 132 / Math.max(it.posts - 1, 1);
+    g.fillStyle = '#c9a06a';
+    for (let k = 0; k < it.posts; k += 1) {
+      const px = startX + k * spacing;
+      g.fillRect(px - 4, it.y - 20, 8, 38);
+      tri(g, [[px - 4, it.y - 20], [px, it.y - 27], [px + 4, it.y - 20]]);
+    }
+    g.fillRect(startX - 6, it.y - 12, 144, 5);
+    g.fillRect(startX - 6, it.y + 4, 144, 5);
+  },
+
+  bush(g, it) {
+    g.fillStyle = it.color;
+    dot(g, it.x, it.y, 20);
+    dot(g, it.x - 15, it.y + 6, 14);
+    dot(g, it.x + 15, it.y + 6, 14);
+    const berrySpots = [[-9, -6], [7, -10], [12, 4], [-13, 5], [0, 8]];
+    g.fillStyle = '#e84f6b';
+    const shown = Math.min(it.berries, berrySpots.length);
+    for (let k = 0; k < shown; k += 1) dot(g, it.x + berrySpots[k][0], it.y + berrySpots[k][1], 3.4);
+  },
+
+  boat(g, it) {
+    g.strokeStyle = '#6b4a2f';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(it.x, it.y - 6);
+    g.lineTo(it.x, it.y - 46);
+    g.stroke();
+
+    g.fillStyle = it.sail;
+    tri(g, [[it.x + 3, it.y - 44], [it.x + 3, it.y - 10], [it.x + 26, it.y - 10]]);
+    g.fillStyle = 'rgba(0,0,0,0.10)';
+    tri(g, [[it.x - 3, it.y - 40], [it.x - 3, it.y - 10], [it.x - 18, it.y - 10]]);
+    g.fillStyle = it.hull;
+    tri(g, [[it.x - 30, it.y - 6], [it.x + 30, it.y - 6], [it.x + 22, it.y + 10], [it.x - 22, it.y + 10]]);
+  },
+
+  stones(g, it) {
+    g.fillStyle = 'rgba(90,90,95,0.85)';
+    for (let k = 0; k < it.count; k += 1) {
+      egg(g, it.x - 8 + (k % 2) * 18, it.y - 34 + k * 20, 15, 7);
+    }
+  },
+};
+
+// The chimney's position is derived from the cottage body rather than its
+// own item coordinates, so it cannot use the one-argument ART pattern.
+function paintChimney(g, it, house) {
   const x = house.x0 + house.w - 48;
   const y = house.y0 - 58;
   if (it.smoke) {
-    ctx.fillStyle = 'rgba(240,240,245,0.75)';
-    disc(ctx, x + 8, y - 16, 8);
-    disc(ctx, x + 16, y - 30, 11);
-    disc(ctx, x + 27, y - 46, 14);
+    g.fillStyle = 'rgba(240,240,245,0.75)';
+    dot(g, x + 8, y - 16, 8);
+    dot(g, x + 16, y - 30, 11);
+    dot(g, x + 27, y - 46, 14);
   }
-  ctx.fillStyle = '#9a5a4a';
-  ctx.fillRect(x, y, 20, 34);
-  ctx.fillStyle = '#7c463a';
-  ctx.fillRect(x - 3, y - 5, 26, 8);
+  g.fillStyle = '#9a5a4a';
+  g.fillRect(x, y, 20, 34);
+  g.fillStyle = '#7c463a';
+  g.fillRect(x - 3, y - 5, 26, 8);
 }
 
-function paintWindow(ctx, it) {
-  ctx.fillStyle = '#6b4a2f';
-  roundedBox(ctx, it.x - 13, it.y - 15, 26, 30, 4);
-  ctx.fillStyle = it.lit ? '#ffd94d' : '#bcd9ea';
-  ctx.fillRect(it.x - 10, it.y - 12, 20, 24);
-  ctx.strokeStyle = '#6b4a2f';
-  ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  ctx.moveTo(it.x, it.y - 12);
-  ctx.lineTo(it.x, it.y + 12);
-  ctx.moveTo(it.x - 10, it.y);
-  ctx.lineTo(it.x + 10, it.y);
-  ctx.stroke();
-  if (it.lit) {
-    ctx.fillStyle = 'rgba(255,217,77,0.25)';
-    disc(ctx, it.x, it.y, 24);
-  }
-}
+// Flower patches bloom on a fixed ring of offsets, again so a changed
+// count reads as flowers gained or lost, not flowers rearranged.
+const PATCH_SPOTS = [[-16, 0], [4, -8], [18, 2], [-4, 8], [12, 12], [-20, 10]];
 
-function paintDoor(ctx, it) {
-  ctx.fillStyle = '#5d3d22';
-  roundedBox(ctx, it.x - 15, it.y - 32, 30, 64, 5);
-  ctx.fillStyle = it.open ? '#2e1d10' : it.color;
-  roundedBox(ctx, it.x - 12, it.y - 29, 24, 58, 4);
-  ctx.fillStyle = '#ffd94d';
-  if (it.open) disc(ctx, it.x - 8, it.y + 2, 2.8);
-  else disc(ctx, it.x + 7, it.y + 2, 2.8);
-}
-
-function paintFlowerBox(ctx, it) {
-  ctx.fillStyle = '#8a5a33';
-  ctx.fillRect(it.x - 14, it.y - 2, 28, 9);
-  for (let i = 0; i < 3; i++) {
-    const fx = it.x - 9 + i * 9;
-    ctx.strokeStyle = '#3f9142';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(fx, it.y - 2);
-    ctx.lineTo(fx, it.y - 9);
-    ctx.stroke();
-    ctx.fillStyle = it.color;
-    disc(ctx, fx, it.y - 11, 4);
-  }
-}
-
-function paintCat(ctx, it) {
-  ctx.fillStyle = it.color;
-  oval(ctx, it.x, it.y - 6, 13, 8); // body
-  disc(ctx, it.x + 11, it.y - 13, 7); // head
-  ctx.beginPath(); // two ears
-  ctx.moveTo(it.x + 6, it.y - 17);
-  ctx.lineTo(it.x + 8, it.y - 23);
-  ctx.lineTo(it.x + 11, it.y - 18);
-  ctx.moveTo(it.x + 12, it.y - 18);
-  ctx.lineTo(it.x + 15, it.y - 23);
-  ctx.lineTo(it.x + 17, it.y - 17);
-  ctx.fill();
-  ctx.strokeStyle = it.color; // tail curling up
-  ctx.lineWidth = 3.4;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(it.x - 12, it.y - 8);
-  ctx.quadraticCurveTo(it.x - 20, it.y - 14, it.x - 17, it.y - 22);
-  ctx.stroke();
-}
-
-function paintLaundry(ctx, it) {
-  const x0 = it.x - 62, x1 = it.x + 62, y = it.y - 44;
-  ctx.strokeStyle = '#7a6a55';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(x0, y + 62);
-  ctx.lineTo(x0, y);
-  ctx.moveTo(x1, y + 62);
-  ctx.lineTo(x1, y);
-  ctx.stroke();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(50,40,30,0.7)';
-  ctx.beginPath();
-  ctx.moveTo(x0, y);
-  ctx.lineTo(x1, y);
-  ctx.stroke();
-  const n = it.shirts.length;
-  it.shirts.forEach((color, i) => {
-    const sx = x0 + ((i + 0.5) / n) * (x1 - x0);
-    ctx.fillStyle = color;
-    roundedBox(ctx, sx - 13, y + 2, 26, 30, 4);
-    ctx.fillStyle = 'rgba(0,0,0,0.10)';
-    ctx.fillRect(sx - 13, y + 24, 26, 8);
-  });
-}
-
-function paintTree(ctx, it) {
-  ctx.fillStyle = '#7a4a2b';
-  ctx.beginPath();
-  ctx.moveTo(it.x - 9, it.y + 66);
-  ctx.quadraticCurveTo(it.x - 4, it.y, it.x - 12, it.y - 26);
-  ctx.lineTo(it.x + 12, it.y - 26);
-  ctx.quadraticCurveTo(it.x + 4, it.y, it.x + 9, it.y + 66);
-  ctx.closePath();
-  ctx.fill();
-  if (it.swing) {
-    ctx.strokeStyle = 'rgba(60,40,20,0.8)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(it.x - 34, it.y - 18);
-    ctx.lineTo(it.x - 34, it.y + 22);
-    ctx.moveTo(it.x - 14, it.y - 18);
-    ctx.lineTo(it.x - 14, it.y + 22);
-    ctx.stroke();
-    ctx.fillStyle = '#a5713d';
-    ctx.fillRect(it.x - 40, it.y + 22, 32, 6);
-  }
-  ctx.fillStyle = it.foliage;
-  disc(ctx, it.x, it.y - 62, 44);
-  disc(ctx, it.x - 36, it.y - 34, 32);
-  disc(ctx, it.x + 36, it.y - 34, 32);
-  disc(ctx, it.x, it.y - 30, 36);
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  disc(ctx, it.x - 14, it.y - 70, 22);
-  // Apples hang on fixed offsets so a changed count still looks natural.
-  const spots = [[-24, -48], [16, -66], [30, -30], [-6, -26], [-34, -22], [8, -84], [38, -52], [-16, -70]];
-  ctx.fillStyle = it.appleColor;
-  for (let i = 0; i < Math.min(it.apples, spots.length); i++) {
-    disc(ctx, it.x + spots[i][0], it.y + spots[i][1], 5.4);
-  }
-}
-
-function paintFence(ctx, it) {
-  const x0 = it.x - 66;
-  const gap = 132 / Math.max(it.posts - 1, 1);
-  ctx.fillStyle = '#c9a06a';
-  for (let i = 0; i < it.posts; i++) {
-    const px = x0 + i * gap;
-    ctx.fillRect(px - 4, it.y - 20, 8, 38);
-    ctx.beginPath();
-    ctx.moveTo(px - 4, it.y - 20);
-    ctx.lineTo(px, it.y - 27);
-    ctx.lineTo(px + 4, it.y - 20);
-    ctx.closePath();
-    ctx.fill();
-  }
-  ctx.fillRect(x0 - 6, it.y - 12, 144, 5);
-  ctx.fillRect(x0 - 6, it.y + 4, 144, 5);
-}
-
-function paintBush(ctx, it) {
-  ctx.fillStyle = it.color;
-  disc(ctx, it.x, it.y, 20);
-  disc(ctx, it.x - 15, it.y + 6, 14);
-  disc(ctx, it.x + 15, it.y + 6, 14);
-  const spots = [[-9, -6], [7, -10], [12, 4], [-13, 5], [0, 8]];
-  ctx.fillStyle = '#e84f6b';
-  for (let i = 0; i < Math.min(it.berries, spots.length); i++) {
-    disc(ctx, it.x + spots[i][0], it.y + spots[i][1], 3.4);
-  }
-}
-
-function paintBoat(ctx, it) {
-  ctx.strokeStyle = '#6b4a2f';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(it.x, it.y - 6);
-  ctx.lineTo(it.x, it.y - 46);
-  ctx.stroke();
-  ctx.fillStyle = it.sail;
-  ctx.beginPath();
-  ctx.moveTo(it.x + 3, it.y - 44);
-  ctx.lineTo(it.x + 3, it.y - 10);
-  ctx.lineTo(it.x + 26, it.y - 10);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = 'rgba(0,0,0,0.10)';
-  ctx.beginPath();
-  ctx.moveTo(it.x - 3, it.y - 40);
-  ctx.lineTo(it.x - 3, it.y - 10);
-  ctx.lineTo(it.x - 18, it.y - 10);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = it.hull;
-  ctx.beginPath();
-  ctx.moveTo(it.x - 30, it.y - 6);
-  ctx.lineTo(it.x + 30, it.y - 6);
-  ctx.lineTo(it.x + 22, it.y + 10);
-  ctx.lineTo(it.x - 22, it.y + 10);
-  ctx.closePath();
-  ctx.fill();
-}
-
-function paintStones(ctx, it) {
-  ctx.fillStyle = 'rgba(90,90,95,0.85)';
-  for (let i = 0; i < it.count; i++) {
-    oval(ctx, it.x - 8 + (i % 2) * 18, it.y - 34 + i * 20, 15, 7);
-  }
-}
-
-// Flower patches bloom on a fixed ring of offsets so counts look planted,
-// not scattered.
-const FLOWER_SPOTS = [[-16, 0], [4, -8], [18, 2], [-4, 8], [12, 12], [-20, 10]];
-
-function paintFlowerPatch(ctx, it) {
-  for (let i = 0; i < it.count; i++) {
-    const [dx, dy] = FLOWER_SPOTS[i % FLOWER_SPOTS.length];
-    const fx = it.x + dx, fy = it.y + dy;
-    ctx.strokeStyle = '#3f9142';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(fx, fy);
-    ctx.lineTo(fx, fy - 9);
-    ctx.stroke();
-    ctx.fillStyle = it.color;
-    for (let p = 0; p < 5; p++) {
-      const a = (p / 5) * Math.PI * 2;
-      disc(ctx, fx + Math.cos(a) * 3.6, fy - 11 + Math.sin(a) * 3.6, 2.9);
+function paintFlowerPatch(g, it) {
+  for (let k = 0; k < it.count; k += 1) {
+    const [dx, dy] = PATCH_SPOTS[k % PATCH_SPOTS.length];
+    const fx = it.x + dx;
+    const fy = it.y + dy;
+    g.strokeStyle = '#3f9142';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(fx, fy);
+    g.lineTo(fx, fy - 9);
+    g.stroke();
+    g.fillStyle = it.color;
+    for (let p = 0; p < 5; p += 1) {
+      const ang = (p / 5) * Math.PI * 2;
+      dot(g, fx + Math.cos(ang) * 3.6, fy - 11 + Math.sin(ang) * 3.6, 2.9);
     }
-    ctx.fillStyle = '#ffd94d';
-    disc(ctx, fx, fy - 11, 2.2);
+    g.fillStyle = '#ffd94d';
+    dot(g, fx, fy - 11, 2.2);
   }
 }
 
-// One painter per item kind; kinds with a special calling convention
-// (chimney, flowerPatch) are handled inside drawScene instead.
-const PAINTERS = {
-  sun: paintSun,
-  moon: paintMoon,
-  cloud: paintCloud,
-  bird: paintBird,
-  star: paintStar,
-  rainbow: paintRainbow,
-  kite: paintKite,
-  houseBody: paintHouseBody,
-  roof: paintRoof,
-  window: paintWindow,
-  door: paintDoor,
-  flowerBox: paintFlowerBox,
-  cat: paintCat,
-  laundry: paintLaundry,
-  tree: paintTree,
-  fence: paintFence,
-  bush: paintBush,
-  boat: paintBoat,
-  stones: paintStones,
-};
-
-// Paint a whole scene variant. `now` (milliseconds) drives only the
-// background's gentle motion: pond ripples and nothing else.
-export function drawScene(ctx, scene, now = 0) {
-  paintBackground(ctx, scene.theme, now / 650);
-  const house = scene.items.find((i) => i.kind === 'houseBody');
+// Paint one whole picture. `nowMs` feeds only the backdrop's ripple phase.
+export function drawScene(g, scene, nowMs = 0) {
+  paintBackdrop(g, scene.theme, nowMs / 650);
+  const house = scene.items.find((entry) => entry.kind === 'houseBody');
   for (const it of scene.items) {
     if (it.visible === false) continue;
-    if (it.kind === 'chimney') { paintChimney(ctx, it, house); continue; }
-    if (it.kind === 'flowerPatch') { paintFlowerPatch(ctx, it); continue; }
-    const paint = PAINTERS[it.kind];
-    if (paint) paint(ctx, it);
+    if (it.kind === 'chimney') paintChimney(g, it, house);
+    else if (it.kind === 'flowerPatch') paintFlowerPatch(g, it);
+    else if (ART[it.kind]) ART[it.kind](g, it);
   }
 }
 
-// The marker laid over a found difference: a bold red ring with a soft
-// pulsing halo and a little tick badge at its top-right.
-export function drawMarker(ctx, diff, pulse) {
-  const r = Math.max(diff.r, 20) + 6 + pulse * 4;
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-  ctx.lineWidth = 7;
-  ctx.beginPath();
-  ctx.arc(diff.x, diff.y, r, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.strokeStyle = '#e8323f';
-  ctx.lineWidth = 4.4;
-  ctx.beginPath();
-  ctx.arc(diff.x, diff.y, r, 0, Math.PI * 2);
-  ctx.stroke();
-  const badgeX = diff.x + r * 0.72, badgeY = diff.y - r * 0.72;
-  ctx.fillStyle = '#e8323f';
-  ctx.beginPath();
-  ctx.arc(badgeX, badgeY, 11, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2.6;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(badgeX - 5, badgeY);
-  ctx.lineTo(badgeX - 1.4, badgeY + 4);
-  ctx.lineTo(badgeX + 5.4, badgeY - 4.4);
-  ctx.stroke();
-  ctx.restore();
+// The ring laid over a difference once it has been found: a white halo, a
+// red ring inside it, and a little tick badge up at the ring's top-right.
+// `pulse` (0..1) breathes the ring's radius.
+export function drawMarker(g, diff, pulse) {
+  const radius = Math.max(diff.r, 20) + 6 + pulse * 4;
+  g.save();
+
+  const ringPasses = [['rgba(255,255,255,0.9)', 7], ['#e8323f', 4.4]];
+  for (const [style, width] of ringPasses) {
+    g.strokeStyle = style;
+    g.lineWidth = width;
+    g.beginPath();
+    g.arc(diff.x, diff.y, radius, 0, Math.PI * 2);
+    g.stroke();
+  }
+
+  const bx = diff.x + radius * 0.72;
+  const by = diff.y - radius * 0.72;
+  g.fillStyle = '#e8323f';
+  dot(g, bx, by, 11);
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 2.6;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(bx - 5, by);
+  g.lineTo(bx - 1.4, by + 4);
+  g.lineTo(bx + 5.4, by - 4.4);
+  g.stroke();
+
+  g.restore();
 }
